@@ -343,16 +343,101 @@ void playPlaylist(char *path)
   closedir(d);
 #endif
 }
+void copyFromLocalDatabase(char *fileName,char *destFolder)
+{
+    char sourcePath[512];
+    char destinationPath[512];
+
+    
+    snprintf(sourcePath, sizeof(sourcePath), "LOCALIFY/localdatabase/%s", fileName);
+
+    
+#ifdef _WIN32
+    snprintf(destinationPath, sizeof(destinationPath), "%s\\%s", destFolder, fileName);
+#else
+    snprintf(destinationPath, sizeof(destinationPath), "%s/%s", destFolder, fileName);
+#endif
+
+    FILE *src = fopen(sourcePath, "rb");
+    if (!src) {
+        perror("no such song in database");
+        return;
+    }
+
+    FILE *dest = fopen(destinationPath, "wb");
+    if (!dest) {
+        perror("wrong playlist");
+        fclose(src);
+        return;
+    }
+
+    char buffer[4096];
+    size_t bytes;
+    while ((bytes = fread(buffer, 1, sizeof(buffer), src)) > 0)
+        fwrite(buffer, 1, bytes, dest);
+
+    fclose(src);
+    fclose(dest);
+
+    printf("File added to playlist successfully:\n   %s → %s\n", filename, destFolder);
+}
+void searchSong(char *keyword)
+{
+    const char *path = "LOCALIFY/localdatabase";
+    printf("🔍 Searching for \"%s\" in %s...\n", keyword, path);
+
+#ifdef _WIN32
+    WIN32_FIND_DATA findFileData;
+    char searchPath[260];
+    snprintf(searchPath, sizeof(searchPath), "%s\\*", path);
+
+    HANDLE hFind = FindFirstFile(searchPath, &findFileData);
+    if (hFind == INVALID_HANDLE_VALUE) {
+        perror("Error opening directory");
+        return;
+    }
+
+    int found = 0;
+    do {
+        if (strcmp(findFileData.cFileName, ".") == 0 ||
+            strcmp(findFileData.cFileName, "..") == 0)
+            continue;
+
+        if (strstr(findFileData.cFileName, keyword)) {
+            printf("🎵 %s\n", findFileData.cFileName);
+            found = 1;
+        }
+    } while (FindNextFile(hFind, &findFileData));
+
+    FindClose(hFind);
+    if (!found) printf("❌ No matching songs found.\n");
+
+#else
+    DIR *d = opendir(path);
+    if (!d) {
+        perror("Error opening directory");
+        return;
+    }
+
+    struct dirent *dir;
+    int found = 0;
+    while ((dir = readdir(d)) != NULL) {
+        if (strcmp(dir->d_name, ".") == 0 || strcmp(dir->d_name, "..") == 0)
+            continue;
+
+        if (strcasestr(dir->d_name, keyword)) {  // case-insensitive match
+            printf("🎵 %s\n", dir->d_name);
+            found = 1;
+        }
+    }
+    closedir(d);
+    if (!found) printf("❌ No matching songs found.\n");
+#endif
+}
 //------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 int main()
 {    
  char c;
-   /* create_directory("testFolder");PLAYING SONGS FROM
-    list_directory(".");
-    change_directory("testFolder");
-    print_current_directory();
-    change_directory("..");
-    remove_directory("testFolder");*/
     
     printf("ENTER 1 FOR VIEWING ALL PLAYLISTS \nENTER 2 FOR GOING TO A PLAYLIST \nENTER 3 FOR PLAYING A PLAYLIST \nENTER 4 FOR CREATING A PLAYLIST\nENTER 5 FOR DELETING A PLAYLIST\nENTER 6 FOR GOING BACK\nENTER 7 FOR NON-LEAF NODES\nENTER 8 FOR PLAYING AOGE TUM KABHI \nENTER 9 FOR EXIT\n");
   while(1)
