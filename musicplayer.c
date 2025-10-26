@@ -137,16 +137,17 @@ void push(char val[100])
     strcpy(p->operator,val);
   }
 }
+char prevsong[100];
 void pop()
 {
   stack* tmp=head;
-  char c;
+ 
   int length=lengthstack();
   stack* freer;
   if(length==1)
   {
     freer=tmp;
-    
+    strcpy(prevsong,freer->operator);
     free(freer);
     head=NULL;
   }
@@ -160,9 +161,9 @@ void pop()
     
     freer=head;
     head=freer->next;
+    strcpy(prevsong,freer->operator);
     free(freer);
   }
-  return;
 }
 void traverseStack()
 {
@@ -178,7 +179,8 @@ void traverseStack()
 }
 //-----------------------------------------------------------------------------PLAYING A SONG----------------------------------------------------------------------------------------
 
-void playSong(const char *filename) {
+void playSong(char *filename) {
+
 #ifdef _WIN32
     // Stop previous song if running
     if (pi.hProcess != NULL) {
@@ -197,7 +199,7 @@ void playSong(const char *filename) {
     if (!CreateProcess(NULL, cmd, NULL, NULL, FALSE, CREATE_NO_WINDOW, NULL, NULL, &si, &pi)) {
         printf("Error starting ffplay\n");
     } else {
-        printf("🎵 Now playing: %s\n", filename);
+        printf("Now playing: %s\n", filename);
     }
 
 #else
@@ -214,11 +216,12 @@ void playSong(const char *filename) {
         _exit(1); // exec failed
     } else if (pid > 0) {
         current_pid = pid;
-        printf("🎵 Now playing: %s\n", filename);
+        printf("Now playing: %s\n", filename);
     } else {
         perror("fork failed");
     }
 #endif
+  push(filename);
 }
 //-----------------------------------------------------------------------------PLAYLIST MANAGER---------------------------------------------------------------------------------------
 void create_directory(char *dirname) {
@@ -379,12 +382,12 @@ void copyFromLocalDatabase(char *fileName,char *destFolder)
     fclose(src);
     fclose(dest);
 
-    printf("File added to playlist successfully:\n   %s → %s\n", filename, destFolder);
+    printf("File added to playlist successfully:\n   %s → %s\n", fileName, destFolder);
 }
 void searchSong(char *keyword)
 {
-    const char *path = "LOCALIFY/localdatabase";
-    printf("🔍 Searching for \"%s\" in %s...\n", keyword, path);
+    const char *path = "./localdatabase";
+    printf("Searching for \"%s\" in %s...\n", keyword, path);
 
 #ifdef _WIN32
     WIN32_FIND_DATA findFileData;
@@ -404,13 +407,13 @@ void searchSong(char *keyword)
             continue;
 
         if (strstr(findFileData.cFileName, keyword)) {
-            printf("🎵 %s\n", findFileData.cFileName);
+            printf("%s\n", findFileData.cFileName);
             found = 1;
         }
     } while (FindNextFile(hFind, &findFileData));
 
     FindClose(hFind);
-    if (!found) printf("❌ No matching songs found.\n");
+    if (!found) printf("No matching songs found.\n");
 
 #else
     DIR *d = opendir(path);
@@ -426,18 +429,19 @@ void searchSong(char *keyword)
             continue;
 
         if (strcasestr(dir->d_name, keyword)) {  // case-insensitive match
-            printf("🎵 %s\n", dir->d_name);
+            printf("%s\n", dir->d_name);
             found = 1;
         }
     }
     closedir(d);
-    if (!found) printf("❌ No matching songs found.\n");
+    if (!found) printf("No matching songs found.\n");
 #endif
 }
 //------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 int main()
 {    
  char c;
+ char playlist[100];
     
     printf("ENTER 1 FOR VIEWING ALL PLAYLISTS \nENTER 2 FOR GOING TO A PLAYLIST \nENTER 3 FOR PLAYING A PLAYLIST \nENTER 4 FOR CREATING A PLAYLIST\nENTER 5 FOR DELETING A PLAYLIST\nENTER 6 FOR GOING BACK\nENTER 7 FOR NON-LEAF NODES\nENTER 8 FOR PLAYING AOGE TUM KABHI \nENTER 9 FOR EXIT\n");
   while(1)
@@ -450,16 +454,20 @@ int main()
     }
     else if(c=='2')
     {
-      change_directory("Playlist1");
+      printf("Enter name of playlist you want to view");
+      scanf("%s",playlist);
+      change_directory(playlist);
+      list_directory(playlist);
     }
     else if(c=='3')
     {
-       
+       searchSong("aoge");
     }
     else if(c=='4')
     {
-    
-     create_directory("Playlist2");
+     printf("Enter name of playlist you want to create");
+     scanf("%s",playlist);
+     create_directory(playlist);
     }
      else if(c=='5')
     {
@@ -482,6 +490,12 @@ int main()
       
     }
     else if(c=='9')
+    {
+      pop();
+      pop();
+      playSong(prevsong);
+    }
+    else if(c=='0')
     {
       break;
     }
