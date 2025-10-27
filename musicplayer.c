@@ -26,6 +26,15 @@
     #define CHDIR(dir) chdir(dir)
     #define GETCWD(buf, size) getcwd(buf, size)
 #endif
+
+#ifdef _WIN32
+    #include <windows.h>
+    HANDLE playThread;
+#else
+    #include <pthread.h>
+    pthread_t playThread;
+#endif
+
 typedef struct stack{
 
 char operator[100];
@@ -181,51 +190,68 @@ void traverseStack()
 
 }
 //-----------------------------------------------------------------------------PLAYING A SONG----------------------------------------------------------------------------------------
+#ifdef _WIN32
+DWORD WINAPI playSongThread(LPVOID arg)
+#else
+void* playSongThread(void* arg)
+#endif
+{
+    char *filename = (char*)arg;
+
+    #ifdef _WIN32
+        if (pi.hProcess != NULL) {
+            TerminateProcess(pi.hProcess, 0);
+            CloseHandle(pi.hProcess);
+            CloseHandle(pi.hThread);
+            pi.hProcess = NULL;
+            pi.hThread = NULL;
+        }
+
+        STARTUPINFO si = { sizeof(si) };
+        char cmd[512];
+        snprintf(cmd, sizeof(cmd), "ffplay -nodisp -autoexit -loglevel quiet \"%s\"", filename);
+        printf("\n[DEBUG] Attempting to play: %s\n", filename);
+        printf("[DEBUG] Full command: %s\n", cmd);
+
+        if (!CreateProcess(NULL, cmd, NULL, NULL, FALSE, CREATE_NO_WINDOW, NULL, NULL, &si, &pi)) {
+            printf("Error starting ffplay\n");
+        } else {
+            printf("Now playing: %s\n", filename);
+        }
+    #else
+        if (current_pid > 0) {
+            kill(current_pid, SIGKILL);
+            current_pid = 0;
+        }
+
+        pid_t pid = fork();
+        if (pid == 0) {
+            execlp("ffplay", "ffplay", "-nodisp", "-autoexit", "-loglevel", "quiet", filename, NULL);
+            _exit(1);
+        } else if (pid > 0) {
+            current_pid = pid;
+            printf("Now playing: %s\n", filename);
+        } else {
+            perror("fork failed");
+        }
+    #endif
+
+    push(filename);
+    return 0;
+}
 
 void playSong(char *filename) {
-
 #ifdef _WIN32
-    // Stop previous song if running
-    if (pi.hProcess != NULL) {
-        TerminateProcess(pi.hProcess, 0);
-        CloseHandle(pi.hProcess);
-        CloseHandle(pi.hThread);
-        pi.hProcess = NULL;
-        pi.hThread = NULL;
+    playThread = CreateThread(NULL, 0, playSongThread, filename, 0, NULL);
+    if (playThread == NULL) {
+        printf("Error creating thread\n");
     }
-
-    STARTUPINFO si = { sizeof(si) };
-    char cmd[512];
-    snprintf(cmd, sizeof(cmd),
-             "ffplay -nodisp -autoexit -loglevel quiet \"%s\"", filename);
-
-    if (!CreateProcess(NULL, cmd, NULL, NULL, FALSE, CREATE_NO_WINDOW, NULL, NULL, &si, &pi)) {
-        printf("Error starting ffplay\n");
-    } else {
-        printf("Now playing: %s\n", filename);
-    }
-
 #else
-    // Stop previous song if running
-    if (current_pid > 0) {
-        kill(current_pid, SIGKILL);
-        current_pid = 0;
-    }
-
-    pid_t pid = fork();
-    if (pid == 0) {
-        // Child process: play song
-        execlp("ffplay", "ffplay", "-nodisp", "-autoexit", "-loglevel", "quiet", filename, NULL);
-        _exit(1); // exec failed
-    } else if (pid > 0) {
-        current_pid = pid;
-        printf("Now playing: %s\n", filename);
-    } else {
-        perror("fork failed");
-    }
+    pthread_create(&playThread, NULL, playSongThread, filename);
+    pthread_detach(playThread); // let it run independently
 #endif
-  push(filename);
 }
+
 //-----------------------------------------------------------------------------PLAYLIST MANAGER---------------------------------------------------------------------------------------
 void create_directory(char *dirname) {
     if (MKDIR(dirname) == 0)
@@ -321,7 +347,7 @@ void playPlaylist(char *path)
 
     printf("PLAYING SONGS FROM '%s':\n", path);
     do {
-    playsong(findFileData.cFileName);
+    playSong(findFileData.cFileName);
 } while (FindNextFile(hFind, &findFileData));
 
 
