@@ -79,6 +79,7 @@ void adder(char val[100])
     strcpy(p->value,val);
   }
 }
+char* toPlaySong;
 void remover()
 {
   queue* tmp=front;
@@ -88,6 +89,7 @@ void remover()
   {
     freer=tmp;
     tmp=tmp->next;
+    strcpy(toPlaySong,freer->value);
     free(freer);
     front=tmp;
   }
@@ -342,8 +344,10 @@ void playPlaylist(char *path)
           continue;
         }
 
+    adder(dir->d_name);
     playSong(dir->d_name);
     }
+  
   closedir(d);
 #endif
 }
