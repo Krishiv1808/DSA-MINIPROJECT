@@ -319,7 +319,7 @@ void playPlaylist(char *path)
         return;
     }
 
-    printf("PLAYING SONGS FROM '%s':\n", path);
+    printf("PLAYING SONGS FROM '%s':\n",playSong(dir->d_name); path);
     do {
     playsong(findFileData.cFileName);
 } while (FindNextFile(hFind, &findFileData));
@@ -345,9 +345,9 @@ void playPlaylist(char *path)
         }
 
     adder(dir->d_name);
-    playSong(dir->d_name);
+    
     }
-  
+  playSong(dir->d_name);
   closedir(d);
 #endif
 }
@@ -477,7 +477,6 @@ int main()
      else if(c=='5')
     {
       change_directory("Playlist1");
-      playPlaylist(".");
     }
      else if(c=='6')
     {
@@ -485,7 +484,7 @@ int main()
     }
       else if(c=='7')
     {
-      change_directory("Playlist2");
+      change_directory("Playlist3");
       playPlaylist(".");
     }
       else if(c=='8')
