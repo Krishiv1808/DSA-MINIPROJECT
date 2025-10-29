@@ -226,6 +226,23 @@ void playSong(char *filename) {
 #endif
   push(filename);
 }
+void stopSong() {
+#ifdef _WIN32
+    if (pi.hProcess != NULL) {
+        TerminateProcess(pi.hProcess, 0);
+        CloseHandle(pi.hProcess);
+        CloseHandle(pi.hThread);
+        pi.hProcess = NULL;
+        pi.hThread = NULL;
+    }
+#else
+    if (current_pid > 0) {
+        kill(current_pid, SIGKILL);
+        current_pid = 0;
+    }
+#endif
+}
+
 //-----------------------------------------------------------------------------PLAYLIST MANAGER---------------------------------------------------------------------------------------
 void create_directory(char *dirname) {
     if (MKDIR(dirname) == 0)
@@ -321,7 +338,7 @@ void playPlaylist(char *path)
 
     printf("PLAYING SONGS FROM '%s':\n", path);
     do {
-    playsong(findFileData.cFileName);
+    playSong(findFileData.cFileName);
 } while (FindNextFile(hFind, &findFileData));
 
 
@@ -502,6 +519,7 @@ int main()
     }
     else if(c=='0')
     {
+      stopSong();
       break;
     }
     printf("next operation\n");
