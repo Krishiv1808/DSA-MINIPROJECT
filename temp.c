@@ -38,6 +38,20 @@ pthread_t playlistThread;
 int stopPlaylist = 0; // 1 = stop playback
 int playlistThreadRunning = 0;
 
+// ----------------------------- GENRE TREE STRUCTURES -----------------------------
+typedef struct SongNode {
+    char songName[256];
+    struct SongNode *next;
+} SongNode;
+
+typedef struct GenreNode {
+    char genre[100];
+    SongNode *songs;               // linked list of songs in this genre
+    struct GenreNode *left, *right; // BST children
+} GenreNode;
+
+GenreNode *genreRoot = NULL;
+
 typedef struct stack{
 
 char operator[100];
@@ -543,6 +557,50 @@ void copyFromLocalDatabase(char *fileName,char *destFolder)
 
     printf("File added to playlist successfully:\n   %s → %s\n", fileName, destFolder);
 }
+// Utility: create a new genre node
+GenreNode* createGenreNode(const char *genre) {
+    GenreNode *newNode = (GenreNode*)malloc(sizeof(GenreNode));
+    strcpy(newNode->genre, genre);
+    newNode->songs = NULL;
+    newNode->left = newNode->right = NULL;
+    return newNode;
+}
+
+// Insert genre into BST
+GenreNode* insertGenre(GenreNode *root, const char *genre) {
+    if (root == NULL) return createGenreNode(genre);
+    int cmp = strcasecmp(genre, root->genre);
+    if (cmp < 0) root->left = insertGenre(root->left, genre);
+    else if (cmp > 0) root->right = insertGenre(root->right, genre);
+    return root;
+}
+
+// Add a song to a genre’s song list
+void addSongToGenre(GenreNode *root, const char *genre, const char *song) {
+    if (!root) return;
+    int cmp = strcasecmp(genre, root->genre);
+    if (cmp == 0) {
+        SongNode *newSong = (SongNode*)malloc(sizeof(SongNode));
+        strcpy(newSong->songName, song);
+        newSong->next = root->songs;
+        root->songs = newSong;
+    } else if (cmp < 0) addSongToGenre(root->left, genre, song);
+    else addSongToGenre(root->right, genre, song);
+}
+
+// Display tree contents
+void displayGenreTree(GenreNode *root) {
+    if (!root) return;
+    displayGenreTree(root->left);
+    printf("\n🎵 Genre: %s\n", root->genre);
+    SongNode *s = root->songs;
+    while (s) {
+        printf("   - %s\n", s->songName);
+        s = s->next;
+    }
+    displayGenreTree(root->right);
+}
+
 void searchSong(char *keyword)
 {
     const char *path = "./localdatabase";
@@ -596,13 +654,50 @@ void searchSong(char *keyword)
     if (!found) printf("No matching songs found.\n");
 #endif
 }
+void buildGenreTreeFromDatabase() {
+    const char *path = "./LOCALIFY/localdatabase";
+    DIR *d = opendir(path);
+    if (!d) {
+        perror("Error opening localdatabase");
+        return;
+    }
+
+    struct dirent *dir;
+    while ((dir = readdir(d)) != NULL) {
+        if (strcmp(dir->d_name, ".") == 0 || strcmp(dir->d_name, "..") == 0)
+            continue;
+
+        char filename[256];
+        strcpy(filename, dir->d_name);
+
+        // Extract artist name: everything before " - "
+        char *dash = strstr(filename, " - ");
+        if (!dash) continue;
+        *dash = '\0'; // terminate at artist name
+        char artist[100];
+        strcpy(artist, filename);
+
+        // Assign genre (simple demo rule)
+        char genre[50];
+        if (strcasestr(artist, "Train")) strcpy(genre, "Rock");
+        else if (strcasestr(artist, "Adele")) strcpy(genre, "Soul");
+        else if (strcasestr(artist, "Arijit")) strcpy(genre, "Romantic");
+        else strcpy(genre, "Pop");
+
+        // Insert genre if not in tree
+        genreRoot = insertGenre(genreRoot, genre);
+        // Add song under that genre
+        addSongToGenre(genreRoot, genre, dir->d_name);
+    }
+    closedir(d);
+    printf("\nGenre tree built successfully from localdatabase.\n");
+}
 //------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 int main()
 {    
  char c;
  char playlist[100];
-    
-    printf("ENTER 1 FOR VIEWING ALL PLAYLISTS \nENTER 2 FOR GOING TO A PLAYLIST \nENTER 3 FOR PLAYING A PLAYLIST \nENTER 4 FOR CREATING A PLAYLIST\nENTER 5 FOR DELETING A PLAYLIST\nENTER 6 FOR GOING BACK\nENTER 7 FOR NON-LEAF NODES\nENTER 8 FOR PLAYING AOGE TUM KABHI \nENTER 9 FOR EXIT\n");
+    printf("ENTER 1 FOR VIEWING ALL PLAYLISTS \nENTER 2 FOR GOING TO A PLAYLIST \nENTER 3 FOR PLAYING A PLAYLIST \nENTER 4 FOR CREATING A PLAYLIST\nENTER 5 FOR DELETING A PLAYLIST\nENTER 6 FOR GOING BACK\nENTER 7 FOR NON-LEAF NODES\nENTER 8 FOR PLAYING AOGE TUM KABHI \nENTER 9 FOR EXIT\nENTER g FOR VIEWING GENRE TREE\n");
   while(1)
   {
    
@@ -654,6 +749,10 @@ int main()
       pop();
       playSong(prevsong);
     }
+	else if (c == 'g') {
+    buildGenreTreeFromDatabase();
+    displayGenreTree(genreRoot);
+	}
     else if(c=='0')
     {
       stopSong();
