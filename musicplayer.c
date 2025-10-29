@@ -7,6 +7,7 @@
 #ifdef _WIN32
     #include <direct.h>     
     #include <windows.h>    
+    #include <process.h> // for _beginthread
     #define MKDIR(dir) _mkdir(dir)
     #define RMDIR(dir) _rmdir(dir)
     #define CHDIR(dir) _chdir(dir)
@@ -21,11 +22,22 @@
     #include <unistd.h>     
     #include <dirent.h> 
     #include <signal.h>
+    #include <pthread.h>   // 
     #define MKDIR(dir) mkdir(dir, 0755)
     #define RMDIR(dir) rmdir(dir)
     #define CHDIR(dir) chdir(dir)
     #define GETCWD(buf, size) getcwd(buf, size)
 #endif
+
+#ifdef _WIN32
+HANDLE playlistThread = NULL;
+#else
+pthread_t playlistThread;
+#endif
+
+int stopPlaylist = 0; // 1 = stop playback
+int playlistThreadRunning = 0;
+
 typedef struct stack{
 
 char operator[100];
@@ -242,6 +254,134 @@ void stopSong() {
     }
 #endif
 }
+// Blocking play: starts ffplay and waits until it exits.
+// Uses global pi/current_pid so stopSong() can terminate it.
+void playSongBlocking(const char *filename) {
+#ifdef _WIN32
+    STARTUPINFO si;
+    PROCESS_INFORMATION localPi;
+    ZeroMemory(&si, sizeof(si));
+    si.cb = sizeof(si);
+    ZeroMemory(&localPi, sizeof(localPi));
+
+    char cmd[1024];
+    snprintf(cmd, sizeof(cmd),
+             "ffplay -nodisp -autoexit -loglevel quiet \"%s\"", filename);
+
+    // Close any previous global handles safely (they should already be closed by stopSong normally)
+    if (pi.hProcess != NULL) {
+        CloseHandle(pi.hProcess);
+        CloseHandle(pi.hThread);
+        pi.hProcess = NULL;
+        pi.hThread = NULL;
+    }
+
+    if (!CreateProcess(NULL, cmd, NULL, NULL, FALSE, CREATE_NO_WINDOW, NULL, NULL, &si, &localPi)) {
+        fprintf(stderr, "Error starting ffplay for %s (err=%lu)\n", filename, GetLastError());
+        return;
+    }
+
+    // assign to global so stopSong() can stop it
+    pi = localPi;
+
+    // wait until ffplay exits or gets killed
+    WaitForSingleObject(pi.hProcess, INFINITE);
+
+    // cleanup
+    CloseHandle(pi.hProcess);
+    CloseHandle(pi.hThread);
+    pi.hProcess = NULL;
+    pi.hThread = NULL;
+#else
+    // fork and wait so this function blocks until song finishes
+    pid_t pid = fork();
+    if (pid == 0) {
+        // child
+        execlp("ffplay", "ffplay", "-nodisp", "-autoexit", "-loglevel", "quiet", filename, (char *)NULL);
+        _exit(1);
+    } else if (pid > 0) {
+        current_pid = pid;
+        int status;
+        waitpid(pid, &status, 0);
+        current_pid = 0;
+    } else {
+        perror("fork failed");
+    }
+#endif
+}
+
+//-----------------------------------------------------------Threaded Playlist function----------------------------------------------
+#ifdef _WIN32
+unsigned __stdcall playlistThreadFunc(void *arg)
+#else
+void *playlistThreadFunc(void *arg)
+#endif
+{
+    char *path = (char *)arg;
+
+    // Mark running
+    playlistThreadRunning = 1;
+
+#ifdef _WIN32
+    WIN32_FIND_DATA findFileData;
+    char searchPath[260];
+    snprintf(searchPath, sizeof(searchPath), "%s\\*", path);
+
+    HANDLE hFind = FindFirstFile(searchPath, &findFileData);
+    if (hFind == INVALID_HANDLE_VALUE) {
+        free(path);
+        playlistThreadRunning = 0;
+        return 0;
+    }
+
+    do {
+        if (stopPlaylist) break;
+        if (findFileData.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
+            continue;
+
+        char fullPath[1024];
+        snprintf(fullPath, sizeof(fullPath), "%s\\%s", path, findFileData.cFileName);
+        playSongBlocking(fullPath);
+    } while (FindNextFile(hFind, &findFileData));
+    FindClose(hFind);
+
+#else
+    DIR *d;
+    struct dirent *dir;
+    d = opendir(path);
+    if (!d) {
+        free(path);
+        playlistThreadRunning = 0;
+        return NULL;
+    }
+
+    while ((dir = readdir(d)) != NULL) {
+        if (stopPlaylist) break;
+        if (strcmp(dir->d_name, ".") == 0 || strcmp(dir->d_name, "..") == 0)
+            continue;
+
+        char fullPath[1024];
+        snprintf(fullPath, sizeof(fullPath), "%s/%s", path, dir->d_name);
+        playSongBlocking(fullPath);
+    }
+    closedir(d);
+#endif
+
+    // free the copied path we allocated in playPlaylist()
+    free(path);
+
+    // mark not running
+    playlistThreadRunning = 0;
+
+#ifdef _WIN32
+    _endthreadex(0);
+    return 0;
+#else
+    return NULL;
+#endif
+}
+
+
 
 //-----------------------------------------------------------------------------PLAYLIST MANAGER---------------------------------------------------------------------------------------
 void create_directory(char *dirname) {
@@ -322,52 +462,49 @@ char* print_current_directory() {
     return cwd;
         
 }
-void playPlaylist(char *path)
-{
-  #ifdef _WIN32
-    WIN32_FIND_DATA findFileData;
-    char searchPath[260];
-    snprintf(searchPath, sizeof(searchPath), "%s\\*", path);
+void playPlaylist(char *path) {
+    stopPlaylist = 0; // reset stop flag
 
-    HANDLE hFind = FindFirstFile(searchPath, &findFileData);
-    if (hFind == INVALID_HANDLE_VALUE) 
-    {
-        perror("Error opening directory");
-        return;
+    // copy path for the thread, because arg must persist
+    char *pathCopy = strdup(path);
+
+#ifdef _WIN32
+    if (playlistThread != NULL) {
+        TerminateThread(playlistThread, 0);
+        CloseHandle(playlistThread);
+        playlistThread = NULL;
     }
-
-    printf("PLAYING SONGS FROM '%s':\n", path);
-    do {
-    playSong(findFileData.cFileName);
-} while (FindNextFile(hFind, &findFileData));
-
-
-    FindClose(hFind);
+    playlistThread = (HANDLE)_beginthreadex(NULL, 0, playlistThreadFunc, pathCopy, 0, NULL);
 #else
-    DIR *d;
-    struct dirent *dir;
-    d = opendir(path);
-    if (!d) 
-    {
-        perror("Error opening directory");
-        return;
-    }
-
-    printf("PLAYING SONGS FROM '%s':\n", path);
-    while ((dir = readdir(d)) != NULL) 
-    {
-    if (strcmp(dir->d_name, ".") == 0 || strcmp(dir->d_name, "..") == 0 || strcmp(dir->d_name, "a.out") == 0 || strcmp(dir->d_name, "musicplayer.c") == 0 || strcmp(dir->d_name, "localdatabase") == 0)
-        {
-          continue;
-        }
-
-    adder(dir->d_name);
-    playSong(dir->d_name);
-    }
-  
-  closedir(d);
+    pthread_create(&playlistThread, NULL, playlistThreadFunc, pathCopy);
 #endif
+
+    printf("Started playlist in background.\n");
 }
+
+
+void stopPlaylistPlayback() {
+    // signal the playlist loop to stop and stop current song
+    stopPlaylist = 1;
+    stopSong(); // kill currently playing ffplay immediately
+
+#ifdef _WIN32
+    if (playlistThread != NULL) {
+        WaitForSingleObject(playlistThread, INFINITE);
+        CloseHandle(playlistThread);
+        playlistThread = NULL;
+    }
+#else
+    if (playlistThreadRunning) {
+        pthread_join(playlistThread, NULL);
+    }
+#endif
+
+    // clear flag
+    playlistThreadRunning = 0;
+}
+
+
 void copyFromLocalDatabase(char *fileName,char *destFolder)
 {
     char sourcePath[512];
