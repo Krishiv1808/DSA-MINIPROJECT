@@ -192,6 +192,181 @@ void traverseStack()
 	printf("]\n");
 
 }
+/****************** Doubly-linked playlist structures & API ******************/
+
+typedef struct dll_node {
+    char filename[1024];         // filename only or full path if you prefer
+    struct dll_node *prev;
+    struct dll_node *next;
+} dll_node;
+
+typedef struct playlist {
+    char name[256];             // friendly playlist name or directory path
+    char path[1024];            // directory path for files
+    dll_node *head;
+    dll_node *tail;
+    dll_node *current;          // currently selected node (for prev/next)
+    int length;
+} playlist;
+
+/* API */
+playlist *build_playlist_from_dir(const char *dirpath, const char *plist_name);
+void free_playlist(playlist *pl);
+void traverse_playlist(playlist *pl);
+void play_current(playlist *pl);   // play pl->current
+void play_next(playlist *pl);      // move current->next and play
+void play_prev(playlist *pl);      // move current->prev and play
+
+/************************* Playlist API implementation *************************/
+
+#include <limits.h> /* for PATH_MAX if you want; not required */
+
+static dll_node *create_node(const char *filename) {
+    dll_node *n = (dll_node *)malloc(sizeof(dll_node));
+    if (!n) return NULL;
+    strncpy(n->filename, filename, sizeof(n->filename)-1);
+    n->filename[sizeof(n->filename)-1] = '\0';
+    n->prev = n->next = NULL;
+    return n;
+}
+
+static void append_node_to_playlist(playlist *pl, dll_node *node) {
+    if (!pl->head) {
+        pl->head = pl->tail = node;
+    } else {
+        node->prev = pl->tail;
+        pl->tail->next = node;
+        pl->tail = node;
+    }
+    pl->length++;
+}
+
+/* Build playlist from directory (non-recursive). Returns malloc'd playlist (free later). */
+playlist *build_playlist_from_dir(const char *dirpath, const char *plist_name) {
+    if (!dirpath) return NULL;
+
+    playlist *pl = (playlist *)malloc(sizeof(playlist));
+    if (!pl) return NULL;
+    memset(pl, 0, sizeof(playlist));
+    strncpy(pl->path, dirpath, sizeof(pl->path)-1);
+    if (plist_name) strncpy(pl->name, plist_name, sizeof(pl->name)-1);
+
+#ifdef _WIN32
+    WIN32_FIND_DATA findFileData;
+    char searchPath[2048];
+    snprintf(searchPath, sizeof(searchPath), "%s\\*", dirpath);
+
+    HANDLE hFind = FindFirstFile(searchPath, &findFileData);
+    if (hFind == INVALID_HANDLE_VALUE) {
+        free(pl);
+        return NULL;
+    }
+
+    do {
+        if (strcmp(findFileData.cFileName, ".") == 0 || strcmp(findFileData.cFileName, "..") == 0)
+            continue;
+        if (findFileData.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
+            continue; /* skip subdirs */
+
+        dll_node *n = create_node(findFileData.cFileName);
+        if (n) append_node_to_playlist(pl, n);
+    } while (FindNextFile(hFind, &findFileData));
+    FindClose(hFind);
+#else
+    DIR *d = opendir(dirpath);
+    if (!d) { free(pl); return NULL; }
+
+    struct dirent *dir;
+    while ((dir = readdir(d)) != NULL) {
+        if (strcmp(dir->d_name, ".") == 0 || strcmp(dir->d_name, "..") == 0) continue;
+        /* skip directories */
+        #ifdef DT_DIR
+        if (dir->d_type == DT_DIR) continue;
+        #endif
+        dll_node *n = create_node(dir->d_name);
+        if (n) append_node_to_playlist(pl, n);
+    }
+    closedir(d);
+#endif
+
+    /* initialize current to head so play_current works immediately if not empty */
+    pl->current = pl->head;
+    return pl;
+}
+
+void free_playlist(playlist *pl) {
+    if (!pl) return;
+    dll_node *it = pl->head;
+    while (it) {
+        dll_node *next = it->next;
+        free(it);
+        it = next;
+    }
+    free(pl);
+}
+
+void traverse_playlist(playlist *pl) {
+    if (!pl) {
+        printf("playlist is NULL\n");
+        return;
+    }
+    printf("Playlist '%s' (%d items) at path: %s\n[", pl->name[0] ? pl->name : pl->path, pl->length, pl->path);
+    dll_node *it = pl->head;
+    while (it) {
+        printf(" %s", it->filename);
+        if (it->next) printf(",");
+        it = it->next;
+    }
+    printf(" ]\n");
+}
+
+/* helper to build a full path for a node */
+static void build_fullpath(char *out, size_t outlen, const char *dirpath, const char *filename) {
+#ifdef _WIN32
+    snprintf(out, outlen, "%s\\%s", dirpath, filename);
+#else
+    snprintf(out, outlen, "%s/%s", dirpath, filename);
+#endif
+}
+
+/* Play the current node using your existing playSong (non-blocking).
+   It will call push(filename) as your existing playSong does. */
+void play_current(playlist *pl) {
+    if (!pl || !pl->current) {
+        printf("No current song to play.\n");
+        return;
+    }
+    char fullpath[2048];
+    build_fullpath(fullpath, sizeof(fullpath), pl->path, pl->current->filename);
+
+    /* stop any existing player and play new one */
+    stopSong();
+    playSong(fullpath);
+    printf("Playing current: %s\n", pl->current->filename);
+}
+
+/* Move to next and play */
+void play_next(playlist *pl) {
+    if (!pl) return;
+    if (pl->current && pl->current->next) {
+        pl->current = pl->current->next;
+        play_current(pl);
+    } else {
+        printf("Already at end of playlist.\n");
+    }
+}
+
+/* Move to prev and play */
+void play_prev(playlist *pl) {
+    if (!pl) return;
+    if (pl->current && pl->current->prev) {
+        pl->current = pl->current->prev;
+        play_current(pl);
+    } else {
+        printf("Already at start of playlist.\n");
+    }
+}
+
 //-----------------------------------------------------------------------------PLAYING A SONG----------------------------------------------------------------------------------------
 
 void playSong(char *filename) {
@@ -598,71 +773,153 @@ void searchSong(char *keyword)
 }
 //------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 int main()
-{    
- char c;
- char playlist[100];
-    
-    printf("ENTER 1 FOR VIEWING ALL PLAYLISTS \nENTER 2 FOR GOING TO A PLAYLIST \nENTER 3 FOR PLAYING A PLAYLIST \nENTER 4 FOR CREATING A PLAYLIST\nENTER 5 FOR DELETING A PLAYLIST\nENTER 6 FOR GOING BACK\nENTER 7 FOR NON-LEAF NODES\nENTER 8 FOR PLAYING AOGE TUM KABHI \nENTER 9 FOR EXIT\n");
-  while(1)
-  {
-   
-    scanf(" %c" ,&c);
-    if(c=='1')
-    {
-      list_directory(".");
-    }
-    else if(c=='2')
-    {
-      printf("Enter name of playlist you want to view");
-      scanf("%s",playlist);
-      change_directory(playlist);
-      list_directory(playlist);
-    }
-    else if(c=='3')
-    {
-       searchSong("aoge");
-    }
-    else if(c=='4')
-    {
-     printf("Enter name of playlist you want to create");
-     scanf("%s",playlist);
-     create_directory(playlist);
-    }
-     else if(c=='5')
-    {
-      change_directory("Playlist1");
-      playPlaylist(".");
-    }
-     else if(c=='6')
-    {
-      change_directory("..");
-    }
-      else if(c=='7')
-    {
-      change_directory("Playlist2");
-      playPlaylist(".");
-    }
-      else if(c=='8')
-    {
-      change_directory("localdatabase");
-      playSong("The Local Train - Aalas Ka Pedh - Aaoge Tum Kabhi (Official Audio).mp3");
-      
-    }
-    else if(c=='9')
-    {
-      pop();
-      pop();
-      playSong(prevsong);
-    }
-    else if(c=='0')
-    {
-      stopSong();
-      break;
-    }
-    printf("next operation\n");
-  }
+{
+    char c;
+    char playlist[100];
 
+    /* NEW: Active in-memory playlist (doubly-linked) */
+    playlist *activePl = NULL;
+    char pldirname[1024];
 
+    printf(
+        "======== MUSIC PLAYER MENU ========\n"
+        "1 : VIEW ALL PLAYLISTS (list current dir)\n"
+        "2 : GO TO A PLAYLIST (cd & list)\n"
+        "3 : SEARCH 'aoge' in localdatabase (demo)\n"
+        "4 : CREATE A PLAYLIST (mkdir)\n"
+        "5 : PLAY Playlist1 (change dir then play)\n"
+        "6 : GO BACK (cd ..)\n"
+        "7 : PLAY Playlist2 (change dir then play)\n"
+        "8 : PLAY specific song from localdatabase (hardcoded)\n"
+        "9 : POP twice and play prevsong (demo)\n"
+        "0 : STOP SONG & EXIT\n\n"
+        "a : LOAD PLAYLIST FROM DIRECTORY (build doubly-linked list)\n"
+        "n : NEXT SONG in loaded playlist\n"
+        "p : PREVIOUS SONG in loaded playlist\n"
+        "l : LIST/SHOW active loaded playlist\n"
+        "===================================\n"
+        "Enter option: "
+    );
+
+    while (1)
+    {
+        /* read one non-whitespace char option safely */
+        if (scanf(" %c", &c) != 1) {
+            clearerr(stdin);
+            continue;
+        }
+
+        if (c == '1')
+        {
+            list_directory(".");
+        }
+        else if (c == '2')
+        {
+            printf("Enter name of playlist you want to view: ");
+            scanf("%99s", playlist);
+            change_directory(playlist);
+            list_directory(playlist);
+        }
+        else if (c == '3')
+        {
+            searchSong("aoge");
+        }
+        else if (c == '4')
+        {
+            printf("Enter name of playlist you want to create: ");
+            scanf("%99s", playlist);
+            create_directory(playlist);
+        }
+        else if (c == '5')
+        {
+            /* Original behaviour (kept as-is): change to Playlist1 then background play */
+            change_directory("Playlist1");
+            playPlaylist(".");
+        }
+        else if (c == '6')
+        {
+            change_directory("..");
+        }
+        else if (c == '7')
+        {
+            change_directory("Playlist2");
+            playPlaylist(".");
+        }
+        else if (c == '8')
+        {
+            change_directory("localdatabase");
+            playSong("The Local Train - Aalas Ka Pedh - Aaoge Tum Kabhi (Official Audio).mp3");
+        }
+        else if (c == '9')
+        {
+            pop();
+            pop();
+            playSong(prevsong);
+        }
+        else if (c == '0')
+        {
+            stopSong();
+            /* cleanup and exit */
+            if (activePl) {
+                free_playlist(activePl);
+                activePl = NULL;
+            }
+            break;
+        }
+
+        /* ---------- NEW LETTER COMMANDS FOR DOUBLY-LINKED PLAYLIST ---------- */
+
+        else if (c == 'a') /* load playlist from directory */
+        {
+            printf("Enter playlist/directory name to load: ");
+            scanf("%1023s", pldirname);
+
+            if (activePl) {
+                free_playlist(activePl);
+                activePl = NULL;
+            }
+            activePl = build_playlist_from_dir(pldirname, pldirname);
+            if (!activePl) {
+                printf("Failed to load playlist from: %s\n", pldirname);
+            } else {
+                printf("Loaded playlist '%s' with %d songs.\n",
+                       activePl->name[0] ? activePl->name : activePl->path,
+                       activePl->length);
+            }
+        }
+        else if (c == 'n') /* next */
+        {
+            if (!activePl) {
+                printf("No playlist loaded. Use 'a' to load one.\n");
+            } else {
+                play_next(activePl);
+            }
+        }
+        else if (c == 'p') /* previous */
+        {
+            if (!activePl) {
+                printf("No playlist loaded. Use 'a' to load one.\n");
+            } else {
+                play_prev(activePl);
+            }
+        }
+        else if (c == 'l') /* list active playlist */
+        {
+            if (!activePl) {
+                printf("No active playlist.\n");
+            } else {
+                traverse_playlist(activePl);
+            }
+        }
+
+        /* unknown option fallback */
+        else
+        {
+            printf("Unknown option '%c'. Try again.\n", c);
+        }
+
+        printf("next operation\n");
+    } /* end while */
 
     return 0;
 }
