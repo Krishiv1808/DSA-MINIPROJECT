@@ -53,25 +53,6 @@ int songCount = 0;
 
 void loadPlaylistSongs(char *path);
  void stopPlaylistPlayback();
-
-
-
-
-typedef struct stack{
-    char operator[100];
-    struct stack *next;
-} stack;
-
-stack* head=NULL;
-
-typedef struct queue{
-    char value[100];
-    struct queue *next;
-} queue;
-
-queue* front=NULL;
-queue* rear=NULL;
-//-------------------------------------------------------------------------QUEUE---------------------------------------------------------
 //------------------------------------------------------------------DLL--------------------------------------------------------
 // ---------- Doubly-linked list helpers ----------
 SongNode* create_song_node(const char *fullpath) {
@@ -117,8 +98,6 @@ void traverse_list()
         tmp = next;
     }
 }
-
-//------------------------------------------------------------------------------STACK---------------------------------------------------------------------------
 
 //-----------------------------------------------------------------------------PLAYING A SONG----------------------------------------------------------------------------------------
 
@@ -347,10 +326,87 @@ void *playlistThreadFunc(void *arg)
     return NULL;
 #endif
 }
+void loadPlaylistSongs(char *path)
+{
+    // free any existing playlist
+    //free_playlist();
+
+#ifdef _WIN32
+    WIN32_FIND_DATA findFileData;
+    char searchPath[260];
+    snprintf(searchPath, sizeof(searchPath), "%s\\*", path);
+    HANDLE hFind = FindFirstFile(searchPath, &findFileData);
+    if (hFind == INVALID_HANDLE_VALUE) return;
+
+    do {
+        if (findFileData.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) continue;
+        if (strcmp(findFileData.cFileName, ".") == 0 || strcmp(findFileData.cFileName, "..") == 0) continue;
+
+        char fullpath[1024];
+        snprintf(fullpath, sizeof(fullpath), "%s\\%s", path, findFileData.cFileName);
+        append_song_node(fullpath);//appending to list
+    } while (FindNextFile(hFind, &findFileData));
+    FindClose(hFind);
+
+#else
+    DIR *d = opendir(path);
+    struct dirent *dir;
+    if (!d) return;
+    while ((dir = readdir(d)) != NULL) {
+        if (strcmp(dir->d_name, ".") == 0 || strcmp(dir->d_name, "..") == 0) continue;
+
+        char fullpath[1024];
+        snprintf(fullpath, sizeof(fullpath), "%s/%s", path, dir->d_name);
+        append_song_node(fullpath);
+    }
+    closedir(d);
+#endif
+
+    // set currentSong to head if songs loaded
+    if (playlistHead) currentSong = playlistHead;
+}
+void playPlaylist(char *path) {
+    stopPlaylist = 0; // reset stop flag
+
+    // copy path for the thread, because arg must persist
+    char *pathCopy = strdup(path);
+
+#ifdef _WIN32
+    if (playlistThread != NULL) {
+        TerminateThread(playlistThread, 0);
+        CloseHandle(playlistThread);
+        playlistThread = NULL;
+    }
+    playlistThread = (HANDLE)_beginthreadex(NULL, 0, playlistThreadFunc, pathCopy, 0, NULL);
+#else
+    pthread_create(&playlistThread, NULL, playlistThreadFunc, pathCopy);
+#endif
+
+    printf("Started playlist in background.\n");
+}
 
 
+void stopPlaylistPlayback() {
+    // signal the playlist loop to stop and stop current song
+    stopPlaylist = 1;
+    stopSong(); // kill currently playing ffplay immediately
 
-//-----------------------------------------------------------------------------PLAYLIST MANAGER---------------------------------------------------------------------------------------
+#ifdef _WIN32
+    if (playlistThread != NULL) {
+        WaitForSingleObject(playlistThread, INFINITE);
+        CloseHandle(playlistThread);
+        playlistThread = NULL;
+    }
+#else
+    if (playlistThreadRunning) {
+        pthread_join(playlistThread, NULL);
+    }
+#endif
+
+    // clear flag
+    playlistThreadRunning = 0;
+}
+//--------------------------------------------------SYSTEM COMMANDS LIKE  RM,LS,ETC-----------------------------------------------------------
 void create_directory(char *dirname) {
     if (MKDIR(dirname) == 0)
         printf("Directory '%s' created successfully.\n", dirname);
@@ -406,49 +462,6 @@ void list_directory(char *path) {
     closedir(d);
 #endif
 }
-
-void loadPlaylistSongs(char *path)
-{
-    // free any existing playlist
-    //free_playlist();
-
-#ifdef _WIN32
-    WIN32_FIND_DATA findFileData;
-    char searchPath[260];
-    snprintf(searchPath, sizeof(searchPath), "%s\\*", path);
-    HANDLE hFind = FindFirstFile(searchPath, &findFileData);
-    if (hFind == INVALID_HANDLE_VALUE) return;
-
-    do {
-        if (findFileData.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) continue;
-        if (strcmp(findFileData.cFileName, ".") == 0 || strcmp(findFileData.cFileName, "..") == 0) continue;
-
-        char fullpath[1024];
-        snprintf(fullpath, sizeof(fullpath), "%s\\%s", path, findFileData.cFileName);
-        append_song_node(fullpath);
-    } while (FindNextFile(hFind, &findFileData));
-    FindClose(hFind);
-
-#else
-    DIR *d = opendir(path);
-    struct dirent *dir;
-    if (!d) return;
-    while ((dir = readdir(d)) != NULL) {
-        if (strcmp(dir->d_name, ".") == 0 || strcmp(dir->d_name, "..") == 0) continue;
-
-        char fullpath[1024];
-        snprintf(fullpath, sizeof(fullpath), "%s/%s", path, dir->d_name);
-        append_song_node(fullpath);
-    }
-    closedir(d);
-#endif
-
-    // set currentSong to head if songs loaded
-    if (playlistHead) currentSong = playlistHead;
-}
-
-
-
 void change_directory(char *dirname) {
     if (CHDIR(dirname) == 0)
         printf("Changed to playlist'%s'\n", dirname);
@@ -471,49 +484,7 @@ char* print_current_directory() {
     return cwd;
 
 }
-void playPlaylist(char *path) {
-    stopPlaylist = 0; // reset stop flag
-
-    // copy path for the thread, because arg must persist
-    char *pathCopy = strdup(path);
-
-#ifdef _WIN32
-    if (playlistThread != NULL) {
-        TerminateThread(playlistThread, 0);
-        CloseHandle(playlistThread);
-        playlistThread = NULL;
-    }
-    playlistThread = (HANDLE)_beginthreadex(NULL, 0, playlistThreadFunc, pathCopy, 0, NULL);
-#else
-    pthread_create(&playlistThread, NULL, playlistThreadFunc, pathCopy);
-#endif
-
-    printf("Started playlist in background.\n");
-}
-
-
-void stopPlaylistPlayback() {
-    // signal the playlist loop to stop and stop current song
-    stopPlaylist = 1;
-    stopSong(); // kill currently playing ffplay immediately
-
-#ifdef _WIN32
-    if (playlistThread != NULL) {
-        WaitForSingleObject(playlistThread, INFINITE);
-        CloseHandle(playlistThread);
-        playlistThread = NULL;
-    }
-#else
-    if (playlistThreadRunning) {
-        pthread_join(playlistThread, NULL);
-    }
-#endif
-
-    // clear flag
-    playlistThreadRunning = 0;
-}
-
-
+//-----------------------------------------------------------------------------------------------------
 void copyFromLocalDatabase(char *fileName,char *destFolder)
 {
     char sourcePath[512];
