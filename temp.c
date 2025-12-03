@@ -1,12 +1,11 @@
-//krishiv nairs project
+// krishiv nairs project
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-
 #ifdef _WIN32
-    #include <direct.h>     
-    #include <windows.h>    
+    #include <direct.h>
+    #include <windows.h>
     #include <process.h> // for _beginthread
     #define MKDIR(dir) _mkdir(dir)
     #define RMDIR(dir) _rmdir(dir)
@@ -16,17 +15,19 @@
     #pragma comment(lib, "winmm.lib")
     PROCESS_INFORMATION pi = {0};
 #else
-    pid_t current_pid = 0;
-    #include <sys/stat.h>   
+    #include <sys/stat.h>
+    #include <sys/wait.h>   // fixed include spacing
     #include <sys/types.h>
-    #include <unistd.h>     
-    #include <dirent.h> 
+    #include <unistd.h>
+    #include <dirent.h>
     #include <signal.h>
-    #include <pthread.h>   // 
+    #include <pthread.h>
     #define MKDIR(dir) mkdir(dir, 0755)
     #define RMDIR(dir) rmdir(dir)
     #define CHDIR(dir) chdir(dir)
     #define GETCWD(buf, size) getcwd(buf, size)
+
+    pid_t current_pid = 0; // moved after includes
 #endif
 
 #ifdef _WIN32
@@ -38,34 +39,35 @@ pthread_t playlistThread;
 int stopPlaylist = 0; // 1 = stop playback
 int playlistThreadRunning = 0;
 
-// ----------------------------- GENRE TREE STRUCTURES -----------------------------
+// ---------- Playlist as Doubly Linked List ----------
 typedef struct SongNode {
-    char songName[256];
+    char path[512];
+    struct SongNode *prev;
     struct SongNode *next;
 } SongNode;
 
-typedef struct GenreNode {
-    char genre[100];
-    SongNode *songs;               // linked list of songs in this genre
-    struct GenreNode *left, *right; // BST children
-} GenreNode;
+SongNode *playlistHead = NULL;
+SongNode *playlistTail = NULL;
+SongNode *currentSong = NULL; // pointer to currently playing song node
+int songCount = 0;
 
-GenreNode *genreRoot = NULL;
+void loadPlaylistSongs(char *path);
+ void stopPlaylistPlayback();
+
+
+
 
 typedef struct stack{
-
-char operator[100];
-struct stack *next;
-
-}stack;
+    char operator[100];
+    struct stack *next;
+} stack;
 
 stack* head=NULL;
+
 typedef struct queue{
-
-char value[100];
-struct queue *next;
-
-}queue;
+    char value[100];
+    struct queue *next;
+} queue;
 
 queue* front=NULL;
 queue* rear=NULL;
@@ -92,7 +94,7 @@ void adder(char val[100])
     rear=p;
     strcpy(p->value,val);
     p->next=NULL;
-    
+
   }
   else{
     while(tmp->next!=NULL)
@@ -105,38 +107,70 @@ void adder(char val[100])
     strcpy(p->value,val);
   }
 }
-char* toPlaySong;
+// FIX: allocate a buffer instead of uninitialized pointer
+char toPlaySong[512];
 void remover()
 {
-  queue* tmp=front;
-  int length=lengthqueue();
-  queue* freer;
-  if(length!=0)
-  {
-    freer=tmp;
-    tmp=tmp->next;
-    strcpy(toPlaySong,freer->value);
-    free(freer);
-    front=tmp;
+  if (!front) {
+    printf("list already empty\n");
+    return;
   }
-  else if(length==0)
-  {
-    printf("list already empty\n"); 
-  }
-  
+
+  queue* freer = front;
+  // safe copy to buffer
+  strncpy(toPlaySong, freer->value, sizeof(toPlaySong)-1);
+  toPlaySong[sizeof(toPlaySong)-1] = '\0';
+  front = front->next;
+  if (front == NULL) rear = NULL;
+  free(freer);
 }
 void traverseQueue()
 {
-	queue *tmp=front;
-	printf("queue contents - [");
-	while(tmp!=NULL)
-	{
-		printf("%s, ",tmp->value);
-		tmp=tmp->next;	
-	}
-	printf("]\n");
+    queue *tmp=front;
+    printf("queue contents - [");
+    while(tmp!=NULL)
+    {
+        printf("%s, ",tmp->value);
+        tmp=tmp->next;
+    }
+    printf("]\n");
 
 }
+//------------------------------------------------------------------DLL--------------------------------------------------------
+// ---------- Doubly-linked list helpers ----------
+SongNode* create_song_node(const char *fullpath) {
+    SongNode *n = (SongNode*)malloc(sizeof(SongNode));
+    if (!n) return NULL;
+    strncpy(n->path, fullpath, sizeof(n->path)-1);
+    n->path[sizeof(n->path)-1] = '\0';
+    n->prev = n->next = NULL;
+    return n;
+}
+
+void append_song_node(const char *fullpath) {
+    SongNode *n = create_song_node(fullpath);
+    if (!n) return;
+    if (!playlistHead) {
+        playlistHead = playlistTail = n;
+    } else {
+        playlistTail->next = n;
+        n->prev = playlistTail;
+        playlistTail = n;
+    }
+    songCount++;
+}
+
+void free_playlist() {
+    SongNode *tmp = playlistHead;
+    while (tmp) {
+        SongNode *next = tmp->next;
+        free(tmp);
+        tmp = next;
+    }
+    playlistHead = playlistTail = currentSong = NULL;
+    songCount = 0;
+}
+
 //------------------------------------------------------------------------------STACK---------------------------------------------------------------------------
 int lengthstack()
 {
@@ -170,7 +204,7 @@ char prevsong[100];
 void pop()
 {
   stack* tmp=head;
- 
+
   int length=lengthstack();
   stack* freer;
   if(length==1)
@@ -183,11 +217,11 @@ void pop()
   else if(length==0)
   {
     printf("list already empty\n");
-  
+    prevsong[0] = '\0'; // avoid stale prevsong
   }
   else
   {
-    
+
     freer=head;
     head=freer->next;
     strcpy(prevsong,freer->operator);
@@ -196,19 +230,21 @@ void pop()
 }
 void traverseStack()
 {
-	stack *tmp=head;
-	printf("stack contents - [");
-	while(tmp!=NULL)
-	{
-		printf("%s, ",tmp->operator);
-		tmp=tmp->next;	
-	}
-	printf("]\n");
+    stack *tmp=head;
+    printf("stack contents - [");
+    while(tmp!=NULL)
+    {
+        printf("%s, ",tmp->operator);
+        tmp=tmp->next;
+    }
+    printf("]\n");
 
 }
 //-----------------------------------------------------------------------------PLAYING A SONG----------------------------------------------------------------------------------------
 
-void playSong(char *filename) {
+void playSong(const char *filename) {
+    if (!filename) return;
+    push((char*)filename); // push onto history stack (cast because push expects char[100])
 
 #ifdef _WIN32
     // Stop previous song if running
@@ -250,8 +286,12 @@ void playSong(char *filename) {
         perror("fork failed");
     }
 #endif
-  push(filename);
+
+    // (DO NOT push again here)
 }
+
+
+
 void stopSong() {
 #ifdef _WIN32
     if (pi.hProcess != NULL) {
@@ -268,7 +308,69 @@ void stopSong() {
     }
 #endif
 }
-// Blocking play: starts ffplay and waits until it exits.
+
+// safe play next that handles background playlist thread and unloaded playlist
+// Play next, but do NOT loop past the last song — print message instead.
+void playNextSong()
+{
+    if (songCount == 0 || !currentSong) {
+        printf("No songs loaded. Please load playlist first.\n");
+        return;
+    }
+
+    // If a background playlist thread is running, stop it first so it doesn't race with manual control
+    if (playlistThreadRunning) {
+        printf("[INFO] Stopping background playlist before manually advancing.\n");
+        stopPlaylistPlayback();
+    }
+
+    // stop the currently playing ffplay process
+    stopSong();
+
+    // If there is no next node, inform the user and do not change currentSong
+    if (!currentSong->next) {
+        printf("No more songs in this playlist.\n");
+        return;
+    }
+
+    // advance pointer
+    currentSong = currentSong->next;
+
+    printf("[INFO] playNextSong -> %s\n", currentSong->path);
+    playSong(currentSong->path);
+}
+
+// Play previous, but do NOT loop before the first song — print message instead.
+void playPreviousSong()
+{
+    if (songCount == 0 || !currentSong) {
+        printf("No songs loaded. Please load playlist first.\n");
+        return;
+    }
+
+    // If a background playlist thread is running, stop it first
+    if (playlistThreadRunning) {
+        printf("[INFO] Stopping background playlist before manually going previous.\n");
+        stopPlaylistPlayback();
+    }
+
+    // stop the currently playing ffplay process
+    stopSong();
+
+    // If there is no previous node, inform the user and do not change currentSong
+    if (!currentSong->prev) {
+        printf("Already at first song in this playlist.\n");
+        return;
+    }
+
+    currentSong = currentSong->prev;
+
+    printf("[INFO] playPreviousSong -> %s\n", currentSong->path);
+    playSong(currentSong->path);
+}
+
+
+// Blocking play starts ffplay and waits until it exits.
 // Uses global pi/current_pid so stopSong() can terminate it.
 void playSongBlocking(const char *filename) {
 #ifdef _WIN32
@@ -336,50 +438,21 @@ void *playlistThreadFunc(void *arg)
     // Mark running
     playlistThreadRunning = 1;
 
-#ifdef _WIN32
-    WIN32_FIND_DATA findFileData;
-    char searchPath[260];
-    snprintf(searchPath, sizeof(searchPath), "%s\\*", path);
-
-    HANDLE hFind = FindFirstFile(searchPath, &findFileData);
-    if (hFind == INVALID_HANDLE_VALUE) {
-        free(path);
-        playlistThreadRunning = 0;
-        return 0;
+    // If playlist not loaded yet, load it from the given path
+    if (!playlistHead) {
+        loadPlaylistSongs(path);
     }
 
-    do {
+    SongNode *node = playlistHead;
+    while (node && !stopPlaylist) {
+        // Blocking play so we wait until the track finishes
+        playSongBlocking(node->path);
+
         if (stopPlaylist) break;
-        if (findFileData.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
-            continue;
 
-        char fullPath[1024];
-        snprintf(fullPath, sizeof(fullPath), "%s\\%s", path, findFileData.cFileName);
-        playSongBlocking(fullPath);
-    } while (FindNextFile(hFind, &findFileData));
-    FindClose(hFind);
-
-#else
-    DIR *d;
-    struct dirent *dir;
-    d = opendir(path);
-    if (!d) {
-        free(path);
-        playlistThreadRunning = 0;
-        return NULL;
+        node = node->next;
+        if (!node) node = playlistHead; // loop the playlist indefinitely
     }
-
-    while ((dir = readdir(d)) != NULL) {
-        if (stopPlaylist) break;
-        if (strcmp(dir->d_name, ".") == 0 || strcmp(dir->d_name, "..") == 0)
-            continue;
-
-        char fullPath[1024];
-        snprintf(fullPath, sizeof(fullPath), "%s/%s", path, dir->d_name);
-        playSongBlocking(fullPath);
-    }
-    closedir(d);
-#endif
 
     // free the copied path we allocated in playPlaylist()
     free(path);
@@ -427,7 +500,7 @@ void list_directory(char *path) {
     printf("songs in '%s':\n", path);
     do {
     if (strcmp(findFileData.cFileName, ".") == 0 || strcmp(findFileData.cFileName, "..") == 0  || strcmp(findFileData.cFileName, "a.out") == 0 || strcmp(findFileData.cFileName, "musicplayer.c") == 0 || strcmp(findFileData.cFileName, "localdatabase") == 0)
-        continue; 
+        continue;
 
     printf("  %s\n", findFileData.cFileName);
 } while (FindNextFile(hFind, &findFileData));
@@ -454,6 +527,48 @@ void list_directory(char *path) {
 #endif
 }
 
+void loadPlaylistSongs(char *path)
+{
+    // free any existing playlist
+    free_playlist();
+
+#ifdef _WIN32
+    WIN32_FIND_DATA findFileData;
+    char searchPath[260];
+    snprintf(searchPath, sizeof(searchPath), "%s\\*", path);
+    HANDLE hFind = FindFirstFile(searchPath, &findFileData);
+    if (hFind == INVALID_HANDLE_VALUE) return;
+
+    do {
+        if (findFileData.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) continue;
+        if (strcmp(findFileData.cFileName, ".") == 0 || strcmp(findFileData.cFileName, "..") == 0) continue;
+
+        char fullpath[1024];
+        snprintf(fullpath, sizeof(fullpath), "%s\\%s", path, findFileData.cFileName);
+        append_song_node(fullpath);
+    } while (FindNextFile(hFind, &findFileData));
+    FindClose(hFind);
+
+#else
+    DIR *d = opendir(path);
+    struct dirent *dir;
+    if (!d) return;
+    while ((dir = readdir(d)) != NULL) {
+        if (strcmp(dir->d_name, ".") == 0 || strcmp(dir->d_name, "..") == 0) continue;
+
+        char fullpath[1024];
+        snprintf(fullpath, sizeof(fullpath), "%s/%s", path, dir->d_name);
+        append_song_node(fullpath);
+    }
+    closedir(d);
+#endif
+
+    // set currentSong to head if songs loaded
+    if (playlistHead) currentSong = playlistHead;
+}
+
+
+
 void change_directory(char *dirname) {
     if (CHDIR(dirname) == 0)
         printf("Changed to playlist'%s'\n", dirname);
@@ -462,19 +577,19 @@ void change_directory(char *dirname) {
 }
 char cwd[1024];
 char* print_current_directory() {
-    
+
     if (GETCWD(cwd, sizeof(cwd)) != NULL)
     {
-        
+
       printf("Current playlist: %s\n", cwd);
-    
+
     }
     else
     {
       perror("getcwd() error");
     }
     return cwd;
-        
+
 }
 void playPlaylist(char *path) {
     stopPlaylist = 0; // reset stop flag
@@ -524,10 +639,10 @@ void copyFromLocalDatabase(char *fileName,char *destFolder)
     char sourcePath[512];
     char destinationPath[512];
 
-    
+
     snprintf(sourcePath, sizeof(sourcePath), "LOCALIFY/localdatabase/%s", fileName);
 
-    
+
 #ifdef _WIN32
     snprintf(destinationPath, sizeof(destinationPath), "%s\\%s", destFolder, fileName);
 #else
@@ -557,50 +672,6 @@ void copyFromLocalDatabase(char *fileName,char *destFolder)
 
     printf("File added to playlist successfully:\n   %s → %s\n", fileName, destFolder);
 }
-// Utility: create a new genre node
-GenreNode* createGenreNode(const char *genre) {
-    GenreNode *newNode = (GenreNode*)malloc(sizeof(GenreNode));
-    strcpy(newNode->genre, genre);
-    newNode->songs = NULL;
-    newNode->left = newNode->right = NULL;
-    return newNode;
-}
-
-// Insert genre into BST
-GenreNode* insertGenre(GenreNode *root, const char *genre) {
-    if (root == NULL) return createGenreNode(genre);
-    int cmp = strcasecmp(genre, root->genre);
-    if (cmp < 0) root->left = insertGenre(root->left, genre);
-    else if (cmp > 0) root->right = insertGenre(root->right, genre);
-    return root;
-}
-
-// Add a song to a genre’s song list
-void addSongToGenre(GenreNode *root, const char *genre, const char *song) {
-    if (!root) return;
-    int cmp = strcasecmp(genre, root->genre);
-    if (cmp == 0) {
-        SongNode *newSong = (SongNode*)malloc(sizeof(SongNode));
-        strcpy(newSong->songName, song);
-        newSong->next = root->songs;
-        root->songs = newSong;
-    } else if (cmp < 0) addSongToGenre(root->left, genre, song);
-    else addSongToGenre(root->right, genre, song);
-}
-
-// Display tree contents
-void displayGenreTree(GenreNode *root) {
-    if (!root) return;
-    displayGenreTree(root->left);
-    printf("\n🎵 Genre: %s\n", root->genre);
-    SongNode *s = root->songs;
-    while (s) {
-        printf("   - %s\n", s->songName);
-        s = s->next;
-    }
-    displayGenreTree(root->right);
-}
-
 void searchSong(char *keyword)
 {
     const char *path = "./localdatabase";
@@ -616,6 +687,7 @@ void searchSong(char *keyword)
         perror("Error opening directory");
         return;
     }
+
 
     int found = 0;
     do {
@@ -654,115 +726,130 @@ void searchSong(char *keyword)
     if (!found) printf("No matching songs found.\n");
 #endif
 }
-void buildGenreTreeFromDatabase() {
-    const char *path = "./LOCALIFY/localdatabase";
-    DIR *d = opendir(path);
-    if (!d) {
-        perror("Error opening localdatabase");
-        return;
-    }
-
-    struct dirent *dir;
-    while ((dir = readdir(d)) != NULL) {
-        if (strcmp(dir->d_name, ".") == 0 || strcmp(dir->d_name, "..") == 0)
-            continue;
-
-        char filename[256];
-        strcpy(filename, dir->d_name);
-
-        // Extract artist name: everything before " - "
-        char *dash = strstr(filename, " - ");
-        if (!dash) continue;
-        *dash = '\0'; // terminate at artist name
-        char artist[100];
-        strcpy(artist, filename);
-
-        // Assign genre (simple demo rule)
-        char genre[50];
-        if (strcasestr(artist, "Train")) strcpy(genre, "Rock");
-        else if (strcasestr(artist, "Adele")) strcpy(genre, "Soul");
-        else if (strcasestr(artist, "Arijit")) strcpy(genre, "Romantic");
-        else strcpy(genre, "Pop");
-
-        // Insert genre if not in tree
-        genreRoot = insertGenre(genreRoot, genre);
-        // Add song under that genre
-        addSongToGenre(genreRoot, genre, dir->d_name);
-    }
-    closedir(d);
-    printf("\nGenre tree built successfully from localdatabase.\n");
-}
 //------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 int main()
-{    
+{
  char c;
  char playlist[100];
-    printf("ENTER 1 FOR VIEWING ALL PLAYLISTS \nENTER 2 FOR GOING TO A PLAYLIST \nENTER 3 FOR PLAYING A PLAYLIST \nENTER 4 FOR CREATING A PLAYLIST\nENTER 5 FOR DELETING A PLAYLIST\nENTER 6 FOR GOING BACK\nENTER 7 FOR NON-LEAF NODES\nENTER 8 FOR PLAYING AOGE TUM KABHI \nENTER 9 FOR EXIT\nENTER g FOR VIEWING GENRE TREE\n");
+
+    printf("ENTER 1 FOR VIEWING ALL PLAYLISTS \nENTER 2 FOR GOING TO A PLAYLIST \nENTER 3 FOR PLAYING A PLAYLIST \nENTER 4 FOR CREATING A PLAYLIST\nENTER 5 FOR DELETING A PLAYLIST\nENTER 6 FOR GOING BACK\nENTER 7 FOR NON-LEAF NODES\nENTER 8 FOR PLAYING AOGE TUM KABHI \nENTER 9 FOR EXIT\n");
   while(1)
   {
-   
+
     scanf(" %c" ,&c);
     if(c=='1')
-    {
-      list_directory(".");
+{
+  list_directory(".");
+}
+else if(c=='2')
+{
+  printf("Enter name of playlist you want to view");
+  scanf("%s",playlist);
+  stopPlaylistPlayback();
+  free_playlist();
+  change_directory(playlist);
+  list_directory(playlist);
+}
+else if(c=='3')
+{
+   searchSong("aoge");
+}
+else if(c=='4')
+{
+ printf("Enter name of playlist you want to create");
+ scanf("%s",playlist);
+ create_directory(playlist);
+}
+ else if(c=='5')
+{
+  stopPlaylistPlayback();
+  free_playlist();
+  change_directory("Playlist1");
+  playPlaylist(".");
+}
+ else if(c=='6')
+{
+  change_directory("..");
+}
+  else if(c=='7')
+{
+  stopPlaylistPlayback();
+  free_playlist();
+  change_directory("Playlist2");
+  playPlaylist(".");
+}
+  else if(c=='8')
+{
+  stopPlaylistPlayback();
+  free_playlist();
+  change_directory("localdatabase");
+  playSong("The Local Train - Aalas Ka Pedh - Aaoge Tum Kabhi (Official Audio).mp3");
+
+}
+else if(c=='9')
+{
+  pop();
+  pop();
+  playSong(prevsong);
+}
+else if(c=='0')
+{
+  stopSong();
+  break;
+}
+
+
+else if (c == 'l') {
+        stopSong();
+        stopPlaylistPlayback();
+        free_playlist();
+
+    loadPlaylistSongs(".");
+    if (songCount > 0) {
+        // updated for DLL: play first node
+        currentSong = playlistHead;
+        playSong(currentSong->path);
+    } else {
+        printf("No songs found in this playlist.\n");
     }
-    else if(c=='2')
-    {
-      printf("Enter name of playlist you want to view");
-      scanf("%s",playlist);
-      change_directory(playlist);
-      list_directory(playlist);
-    }
-    else if(c=='3')
-    {
-       searchSong("aoge");
-    }
-    else if(c=='4')
-    {
-     printf("Enter name of playlist you want to create");
-     scanf("%s",playlist);
-     create_directory(playlist);
-    }
-     else if(c=='5')
-    {
-      change_directory("Playlist1");
-      playPlaylist(".");
-    }
-     else if(c=='6')
-    {
-      change_directory("..");
-    }
-      else if(c=='7')
-    {
-      change_directory("Playlist2");
-      playPlaylist(".");
-    }
-      else if(c=='8')
-    {
-      change_directory("localdatabase");
-      playSong("The Local Train - Aalas Ka Pedh - Aaoge Tum Kabhi (Official Audio).mp3");
-      
-    }
-    else if(c=='9')
-    {
-      pop();
-      pop();
-      playSong(prevsong);
-    }
-	else if (c == 'g') {
-    buildGenreTreeFromDatabase();
-    displayGenreTree(genreRoot);
-	}
-    else if(c=='0')
-    {
-      stopSong();
-      break;
-    }
-    printf("next operation\n");
+}
+else if (c == 'k') {
+        stopSong();
+        
+
+    playNextSong();
+}
+else if (c == 'j') {
+        stopSong();
+        
+        playPreviousSong();
+
+
+}
+else if (c == 'i') {
+stopSong();
+
+}
+
+else if (c == 'o') {
+char dir[512];
+printf("Enter playlist directory: ");
+scanf("%s", dir);
+stopPlaylistPlayback(); // ensure background playlist isn't using the old list
+free_playlist();
+loadPlaylistSongs(dir);
+if (songCount > 0) {
+    currentSong = playlistHead;
+    playSong(currentSong->path);
+} else {
+    printf("No songs found in %s\n", dir);
+}
+}
+
+printf("next operation\n");
+
+
   }
-
-
 
     return 0;
 }
-
