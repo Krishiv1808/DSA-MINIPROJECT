@@ -53,7 +53,7 @@ int songCount = 0;
 
 void loadPlaylistSongs(char *path);
  void stopPlaylistPlayback();
-//------------------------------------------------------------------DLL--------------------------------------------------------
+//-------------------------------------------DLL--------------------------------------------------------
 // ---------- Doubly-linked list helpers ----------
 SongNode* create_song_node(const char *fullpath) {
     SongNode *n = (SongNode*)malloc(sizeof(SongNode));
@@ -98,6 +98,21 @@ void traverse_list()
         tmp = next;
     }
 }
+//------------------------------------------------------------------------graph like representation---------------------------------------------------
+
+typedef struct PlaylistList{
+  char songName;
+  struct PlaylistList* next;
+} PlaylistList;
+
+typedef struct adjancencyPlaylist{
+  char playlistName;
+  struct adjancencyPlaylist* next;
+  PlaylistList* songHead;
+  
+} adjacencyPlaylist;
+adjacencyPlaylist* adjHead;
+
 
 //-----------------------------------------------------------------------------PLAYING A SONG----------------------------------------------------------------------------------------
 
@@ -148,8 +163,6 @@ void playSong(const char *filename) {
 
     // (DO NOT push again here)
 }
-
-
 
 void stopSong() {
 #ifdef _WIN32
@@ -298,9 +311,9 @@ void *playlistThreadFunc(void *arg)
     playlistThreadRunning = 1;
 
     // If playlist not loaded yet, load it from the given path
-    if (!playlistHead) {
+    //if (!playlistHead) 
         loadPlaylistSongs(path);
-    }
+  
 
     SongNode *node = playlistHead;
     while (node && !stopPlaylist) {
@@ -702,7 +715,6 @@ traverse_list();
 
 }
 printf("next operation\n");
-
 
   }
 
