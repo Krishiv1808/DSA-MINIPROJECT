@@ -110,11 +110,12 @@ typedef struct adjPlaylist{
 PlaylistList* playlHead=NULL;
 adjPlaylist* adjHead=NULL;
 
-void addFolderToList(const char *folderName) {
+void addFolderToList(const char *folderPath) {
     adjPlaylist *n = (adjPlaylist*)malloc(sizeof(adjPlaylist));
     if (!n) return;
 
-    strncpy(n->playlistName, folderName, sizeof(n->playlistName) - 1);
+    // store FULL PATH here
+    strncpy(n->playlistName, folderPath, sizeof(n->playlistName) - 1);
     n->playlistName[sizeof(n->playlistName) - 1] = '\0';
 
     n->songHead = NULL;
@@ -128,10 +129,48 @@ void addFolderToList(const char *folderName) {
         tmp->next = n;
     }
 }
+adjPlaylist* findPlaylistByPath(const char *path) {
+    adjPlaylist *tmp = adjHead;
+    while (tmp) {
+        if (strcmp(tmp->playlistName, path) == 0) {
+            return tmp;
+        }
+        tmp = tmp->next;
+    }
+    return NULL;
+}
+PlaylistList* createPlaylistSongNode(const char *songName) {
+    PlaylistList *n = (PlaylistList*)malloc(sizeof(PlaylistList));
+    if (!n) return NULL;
+    strncpy(n->songName, songName, MAX - 1);
+    n->songName[MAX - 1] = '\0';
+    n->next = NULL;
+    return n;
+}
+void freePlaylistSongs(PlaylistList **head) {
+    PlaylistList *tmp = *head;
+    while (tmp) {
+        PlaylistList *next = tmp->next;
+        free(tmp);
+        tmp = next;
+    }
+    *head = NULL;
+}
+void appendSongToAdjPlaylist(adjPlaylist *pl, const char *songName) {
+    if (!pl) return;
+    PlaylistList *n = createPlaylistSongNode(songName);
+    if (!n) return;
 
+    if (pl->songHead == NULL) {
+        pl->songHead = n;
+    } else {
+        PlaylistList *tmp = pl->songHead;
+        while (tmp->next) tmp = tmp->next;
+        tmp->next = n;
+    }
+}
 void loadFoldersIntoList(const char *path)
 {
-
 #ifdef _WIN32
     WIN32_FIND_DATA findFileData;
     char searchPath[260];
@@ -144,11 +183,17 @@ void loadFoldersIntoList(const char *path)
     do {
         if (findFileData.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
             if (strcmp(findFileData.cFileName, ".") == 0 ||
-                strcmp(findFileData.cFileName, "..") == 0 ||
-                strcmp(findFileData.cFileName, "musicplayer.c") == 0)
+                strcmp(findFileData.cFileName, "..") == 0)
                 continue;
 
-            addFolderToList(findFileData.cFileName);
+            char fullpath[512];
+            snprintf(fullpath, sizeof(fullpath), "%s\\%s", path, findFileData.cFileName);
+
+            // 1) add playlist node (adjacency list)
+            addFolderToList(fullpath);
+
+            // 2) load its songs into DLL + into that adjPlaylist’s songHead
+            loadPlaylistSongs(fullpath);   // ✅ correct name, full path
         }
     } while (FindNextFile(hFind, &findFileData));
 
@@ -170,13 +215,19 @@ void loadFoldersIntoList(const char *path)
         snprintf(fullpath, sizeof(fullpath), "%s/%s", path, dir->d_name);
 
         if (stat(fullpath, &st) == 0 && S_ISDIR(st.st_mode)) {
-            addFolderToList(dir->d_name);
+            // 1) add playlist node
+            addFolderToList(fullpath);
+
+            // 2) load its songs
+            loadPlaylistSongs(fullpath);   // ✅ add this line here too
         }
     }
 
     closedir(d);
 #endif
 }
+
+
 
 //------------------------------------------------------------------------------STACK---------------------------------------------------------------------------
 typedef struct stack{
@@ -272,6 +323,29 @@ int is_mp3_file(const char *filename) {
         (b == 'm' || b == 'M') &&
         (c == 'p' || c == 'P') &&
         (d == '3');
+}
+void traversePlaylistsDFS() {
+    adjPlaylist *p = adjHead;
+
+    printf("\n=== DFS Traversal of All Playlists and Their Songs ===\n");
+
+    while (p != NULL) {
+        printf("\nPlaylist: %s\n", p->playlistName);
+
+        PlaylistList *s = p->songHead;
+        if (s == NULL) {
+            printf("   (No songs found)\n");
+        } else {
+            while (s != NULL) {
+                printf("   - %s\n", s->songName);
+                s = s->next;
+            }
+        }
+
+        p = p->next;   // move to next playlist (DFS-like)
+    }
+
+    printf("\n======================================================\n");
 }
 
 //--------------------------------------------BST--------------------------------------
@@ -775,8 +849,15 @@ void *playlistThreadFunc(void *arg)
 }
 void loadPlaylistSongs(char *path)
 {
-    // free any existing playlist
+    // free any existing DLL playlist
     free_playlist();
+
+    // find the adjacency node for this playlist path (if any)
+    adjPlaylist *plNode = findPlaylistByPath(path);
+    if (plNode) {
+        // clear its existing song list so we don't duplicate entries
+        freePlaylistSongs(&plNode->songHead);
+    }
 
 #ifdef _WIN32
     WIN32_FIND_DATA findFileData;
@@ -789,17 +870,21 @@ void loadPlaylistSongs(char *path)
         if (findFileData.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) continue;
         if (strcmp(findFileData.cFileName, ".") == 0 || strcmp(findFileData.cFileName, "..") == 0) continue;
 
-        // Only take mp3 files
-if (!is_mp3_file(findFileData.cFileName))
-    continue;
+        // Only mp3 files
+        if (!is_mp3_file(findFileData.cFileName))
+            continue;
 
-char fullpath[1024];
-snprintf(fullpath, sizeof(fullpath), "%s\\%s", path, findFileData.cFileName);
-append_song_node(fullpath);
-//adjPlaylist *tmp=adjHead;
+        char fullpath[1024];
+        snprintf(fullpath, sizeof(fullpath), "%s\\%s", path, findFileData.cFileName);
 
+        // 1) Add to current DLL playlist (for next/prev)
+        append_song_node(fullpath);
 
-   
+        // 2) Also add to adjacency playlist song list
+        if (plNode) {
+            appendSongToAdjPlaylist(plNode, findFileData.cFileName); // store just file name
+        }
+
     } while (FindNextFile(hFind, &findFileData));
     FindClose(hFind);
 
@@ -807,17 +892,24 @@ append_song_node(fullpath);
     DIR *d = opendir(path);
     struct dirent *dir;
     if (!d) return;
+
     while ((dir = readdir(d)) != NULL) {
         if (strcmp(dir->d_name, ".") == 0 || strcmp(dir->d_name, "..") == 0) continue;
 
         // Only mp3 files
-if (!is_mp3_file(dir->d_name))
-    continue;
+        if (!is_mp3_file(dir->d_name))
+            continue;
 
-char fullpath[1024];
-snprintf(fullpath, sizeof(fullpath), "%s/%s", path, dir->d_name);
-append_song_node(fullpath);
+        char fullpath[1024];
+        snprintf(fullpath, sizeof(fullpath), "%s/%s", path, dir->d_name);
 
+        // 1) Add to current DLL playlist (for next/prev)
+        append_song_node(fullpath);
+
+        // 2) Also add to adjacency playlist song list
+        if (plNode) {
+            appendSongToAdjPlaylist(plNode, dir->d_name); // just filename
+        }
     }
     closedir(d);
 #endif
@@ -825,6 +917,7 @@ append_song_node(fullpath);
     // set currentSong to head if songs loaded
     if (playlistHead) currentSong = playlistHead;
 }
+
 
 void playPlaylist(char *path) {
     stopPlaylist = 0; // reset stop flag
@@ -1047,6 +1140,10 @@ int main()
 {
  char c;
  char playlist[100];
+
+ loadFoldersIntoList(".");
+ traversePlaylistsDFS();
+
 
  const char *roots[] = {"localdatabase"};
  build_bst_from_roots(roots, 1);
